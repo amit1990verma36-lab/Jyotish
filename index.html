@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Jyotish - Kundli</title>
+<style>
+*{box-sizing:border-box}
+body{margin:auto;font-family:system-ui,sans-serif;background:#0f1020;color:#eee;padding:16px;max-width:760px}
+h1{font-size:22px;text-align:center;color:#ffd36b}
+h3{color:#ffd36b;margin:4px 0 8px}
+.card{background:#1a1b33;border-radius:12px;padding:14px;margin:12px 0}
+label{display:block;font-size:13px;color:#aab;margin:8px 0 3px}
+input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#0f1020;color:#eee;font-size:15px}
+button{background:#ffb300;color:#000;font-weight:700;border:0;cursor:pointer;margin-top:12px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:6px;border-bottom:1px solid #2a2b4a;text-align:left}
+.sn{fill:#8b8fb8;font-size:11px}.pl{fill:#ffd36b;font-size:12px;font-weight:700}
+svg{width:100%;max-width:400px;display:block;margin:auto}
+small{color:#99a}
+#ai{white-space:pre-wrap;line-height:1.55;margin-top:10px}
+</style>
+</head>
+<body>
+<h1>🔮 AI Jyotish (Vedic Kundli)</h1>
+
+<div class="card">
+  <label>Naam</label><input id="name">
+  <div class="row">
+    <div><label>Janm tithi</label><input type="date" id="dob"></div>
+    <div><label>Janm samay</label><input type="time" id="tob"></div>
+  </div>
+  <label>Janm sthan (city)</label>
+  <div class="row">
+    <input id="city" placeholder="e.g. Raipur">
+    <button onclick="findCity()" style="margin:0;flex:0 0 90px">Dhundo</button>
+  </div>
+  <div class="row">
+    <div><label>Latitude</label><input id="lat"></div>
+    <div><label>Longitude (East +)</label><input id="lon"></div>
+    <div><label>UTC offset</label><input id="tz" value="5.5"></div>
+  </div>
+  <button onclick="build()">Kundli banao</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const rad=Math.PI/180,deg=180/Math.PI;
+const norm=x=>((x%360)+360)%360;
+const sind=x=>Math.sin(x*rad),cosd=x=>Math.cos(x*rad);
+const MODEL='claude-sonnet-5-5'; // chahe to badal lo
+
+/* ---------- Data ---------- */
+const NAMES=['Sun','Moon','Mars','Mercury','Jupiter','Venus','Saturn','Rahu','Ketu'];
+const AB={Sun:'Su',Moon:'Mo',Mars:'Ma',Mercury:'Me',Jupiter:'Ju',Venus:'Ve',Saturn:'Sa',Rahu:'Ra',Ketu:'Ke'};
+const RASHI=['Mesha','Vrishabha','Mithuna','Karka','Simha','Kanya','Tula','Vrishchika','Dhanu','Makara','Kumbha','Meena'];
+const NAK=['Ashwini','Bharani','Krittika','Rohini','Mrigashira','Ardra','Punarvasu','Pushya','Ashlesha','Magha','Purva Phalguni','Uttara Phalguni','Hasta','Chitra','Swati','Vishakha','Anuradha','Jyeshtha','Mula','Purva Ashadha','Uttara Ashadha','Shravana','Dhanishta','Shatabhisha','Purva Bhadrapada','Uttara Bhadrapada','Revati'];
+const TRAIT=[
+'josheela, leader type, jaldi faisla lene wala; gussa aur jaldbazi par dhyan',
+'sthir, practical, aaram aur sundarta pasand karne wala; kabhi-kabhi zidd',
+'curious, baat-cheet mein tez, seekhne wala; man chanchal ho sakta hai',
+'bhavuk, caring, ghar-parivar se juda; mood swings ho sakte hain',
+'confident, izzat chahne wala, dil se udaar; ego par nazar rakhein',
+'analytical, mehnati, detail-oriented; zyada chinta aur self-criticism',
+'balanced, diplomatic, kala aur rishton ko mahatva; faisle mein deri',
+'gehra, intense, research-minded, determined; shak ya dabaa hua gussa',
+'optimistic, gyan aur yatra pasand, honest; kabhi laparwahi',
+'disciplined, ambitious, dheere par pakka progress; kabhi bahut serious',
+'independent, alag soch wala, samaj se juda; kabhi aloof',
+'dayalu, intuitive, creative/spiritual; confusion ya escapism se bachein'];
+const DL=['Ketu','Venus','Sun','Moon','Mars','Rahu','Jupiter','Saturn','Mercury'];
+const DY=[7,20,6,10,7,18,16,19,17];
+const DTXT={
+Sun:'authority, career-recognition, pita/sarkar se jude mudde; ego aur health par dhyan',
+Moon:'man, ghar, maa aur emotions ka daur; mood ups-downs ke saath bhavnatmak vikas',
+Mars:'energy, action, property/jameen; gussa aur jaldbazi se bachein',
+Rahu:'ambition, technology/foreign, achanak badlav; bhram aur shortcuts se savdhaan',
+Jupiter:'gyan, growth, shiksha, bhagya; aam taur par shubh phal wala samay',
+Saturn:'mehnat, zimmedari, der se milne wale phal; discipline zaroori',
+Mercury:'vyapar, communication, padhai aur skills; nervous energy',
+Ketu:'vairagya, spirituality, detachment; achanak loss ya confusion ka ehsaas',
+Venus:'rishte, luxury, kala, comfort; indulgence se bachein'};
+
+/* ---------- Astronomy (Schlyter orbital elements, geocentric) ---------- */
+function EL(n,d){switch(n){
+case 'Sun':return{N:0,i:0,w:282.9404+4.70935e-5*d,a:1,e:0.016709-1.151e-9*d,M:356.047+0.9856002585*d};
+case 'Moon':return{N:125.1228-0.0529538083*d,i:5.1454,w:318.0634+0.1643573223*d,a:60.2666,e:0.0549,M:115.3654+13.0649929509*d};
+case 'Mercury':return{N:48.3313+3.24587e-5*d,i:7.0047+5e-8*d,w:29.1241+1.01444e-5*d,a:0.387098,e:0.205635+5.59e-10*d,M:168.6562+4.0923344368*d};
+case 'Venus':return{N:76.6799+2.4659e-5*d,i:3.3946+2.75e-8*d,w:54.891+1.38374e-5*d,a:0.72333,e:0.006773-1.302e-9*d,M:48.0052+1.6021302244*d};
+case 'Mars':return{N:49.5574+2.11081e-5*d,i:1.8497-1.78e-8*d,w:286.5016+2.92961e-5*d,a:1.523688,e:0.093405+2.516e-9*d,M:18.6021+0.5240207766*d};
+case 'Jupiter':return{N:100.4542+2.76854e-5*d,i:1.303-1.557e-7*d,w:273.8777+1.64505e-5*d,a:5.20256,e:0.048498+4.469e-9*d,M:19.895+0.0830853001*d};
+case 'Saturn':return{N:113.6634+2.3898e-5*d,i:2.4886-1.081e-7*d,w:339.3939+2.97661e-5*d,a:9.55475,e:0.055546-9.499e-9*d,M:316.967+0.0334442282*d};
+}}
+function kepler(M,e){
+  let E=M+e*deg*sind(M)*(1+e*cosd(M));
+  for(let k=0;k<12;k++){const dE=(E-e*deg*sind(E)-M)/(1-e*cosd(E));E-=dE;if(Math.abs(dE)<1e-9)break;}
+  return E;
+}
+function helio(el){
+  const E=kepler(norm(el.M),el.e);
+  const xv=el.a*(cosd(E)-el.e),yv=el.a*Math.sqrt(1-el.e*el.e)*sind(E);
+  const v=Math.atan2(yv,xv)*deg,r=Math.hypot(xv,yv),vw=v+el.w;
+  const x=r*(cosd(el.N)*cosd(vw)-sind(el.N)*sind(vw)*cosd(el.i));
+  const y=r*(sind(el.N)*cosd(vw)+cosd(el.N)*sind(vw)*cosd(el.i));
+  const z=r*sind(vw)*sind(el.i);
+  return{lon:norm(Math.atan2(y,x)*deg),lat:Math.atan2(z,Math.hypot(x,y))*deg,r};
+}
+// tropical geocentric longitude
+function trop(n,jd){
+  const d=jd-2451543.5;
+  if(n=='Rahu')return norm(125.1228-0.0529538083*d);          // mean node
+  if(n=='Ketu')return norm(125.1228-0.0529538083*d+180);
+  const S=helio(EL('Sun',d));
+  if(n=='Sun')return S.lon;
+  if(n=='Moon'){
+    const e=EL('Moon',d),s=EL('Sun',d),m=helio(e);
+    const Ms=s.M,Mm=e.M,Ls=Ms+s.w,Lm=Mm+e.w+e.N,D=Lm-Ls,F=Lm-e.N;
+    const p=-1.274*sind(Mm-2*D)+0.658*sind(2*D)-0.186*sind(Ms)-0.059*sind(2*Mm-2*D)
+      -0.057*sind(Mm-2*D+Ms)+0.053*sind(Mm+2*D)+0.046*sind(2*D-Ms)+0.041*sind(Mm-Ms)
+      -0.035*sind(D)-0.031*sind(Mm+Ms)-0.015*sind(2*F-2*D)+0.011*sind(Mm-4*D);
+    return norm(m.lon+p);
+  }
+  const h=helio(EL(n,d));let dl=0,db=0;
+  if(n=='Jupiter'||n=='Saturn'){
+    const Mj=EL('Jupiter',d).M,Ms=EL('Saturn',d).M;
+    if(n=='Jupiter')dl=-0.332*sind(2*Mj-5*Ms-67.6)-0.056*sind(2*Mj-2*Ms+21)+0.042*sind(3*Mj-5*Ms+21)
+      -0.036*sind(Mj-2*Ms)+0.022*cosd(Mj-Ms)+0.023*sind(2*Mj-3*Ms+52)-0.016*sind(Mj-5*Ms-69);
+    else{dl=0.812*sind(2*Mj-5*Ms-67.6)-0.229*cosd(2*Mj-4*Ms-2)+0.119*sind(Mj-2*Ms-3)
+      +0.046*sind(2*Mj-6*Ms-69)+0.014*sind(Mj-3*Ms+32);
+      db=-0.02*cosd(2*Mj-4*Ms-2)+0.018*sind(2*Mj-6*Ms-49);}
+  }
+  const lo=h.lon+dl,la=h.lat+db;
+  const xg=h.r*cosd(lo)*cosd(la)+S.r*cosd(S.lon),yg=h.r*sind(lo)*cosd(la)+S.r*sind(S.lon);
+  return norm(Math.atan2(yg,xg)*deg);
+}
+const ayan=jd=>23.853+(jd-2451545)/365.25*0.0139689; // Lahiri (approx)
+function ascTrop(jd,lat,lon){
+  const d=jd-2451543.5,eps=23.4393-3.563e-7*d;
+  const lst=norm(280.46061837+360.98564736629*(jd-2451545)+lon);
+  return norm(Math.atan2(cosd(lst),-(sind(lst)*cosd(eps)+Math.tan(lat*rad)*sind(eps)))*deg);
+}
+
+/* ---------- Dasha ---------- */
+function dashas(moon,bjd){
+  const w=360/27,idx=Math.floor(moon/w)%9,frac=(moon%w)/w;
+  let s=bjd-frac*DY[idx]*365.25;const out=[];
+  for(let k=0;k<9;k++){const i=(idx+k)%9,e=s+DY[i]*365.25;out.push({lord:DL[i],start:s,end:e});s=e;}
+  return out;
+}
+function antar(md){
+  const i=DL.indexOf(md.lord);let s=md.start;const out=[];
+  for(let k=0;k<9;k++){const j=(i+k)%9,e=s+DY[i]*DY[j]/120*365.25;out.push({lord:DL[j],start:s,end:e});s=e;}
+  return out;
+}
+
+/* ---------- Helpers ---------- */
+const jdDate=jd=>new Date((jd-2440587.5)*864e5).toISOString().slice(0,10);
+const fd=x=>Math.floor(x)+"°"+String(Math.floor((x%1)*60)).padStart(2,'0')+"'";
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let CH={};
+
+async function findCity(){
+  const q=$('city').value.trim();if(!q)return;
+  try{
+    const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q));
+    const j=await r.json();
+    if(!j.length)return alert('City nahi mili, lat/lon haath se daalo');
+    $('lat').value=(+j[0].lat).toFixed(4);$('lon').value=(+j[0].lon).toFixed(4);
+  }catch(e){alert('Search fail hua - lat/lon haath se daalo');}
+}
+
+/* ---------- North Indian chart ---------- */
+const HP=[[200,100],[100,38],[38,100],[100,200],[38,300],[100,362],[200,300],[300,362],[362,300],[300,200],[362,100],[300,38]];
+function chartSVG(ls,P){
+  let s='<svg viewBox="0 0 400 400"><rect x="1" y="1" width="398" height="398" fill="#12132a" stroke="#ffd36b" stroke-width="2"/>'
+   +'<path d="M0 0L400 400M400 0L0 400M200 0L400 200L200 400L0 200Z" fill="none" stroke="#ffd36b" stroke-width="1.5"/>';
+  for(let h=1;h<=12;h++){
+    const [x,y]=HP[h-1],sign=(ls+h-1)%12+1;
+    const items=P.filter(p=>p.house==h).map(p=>AB[p.n]+(p.retro&&p.n!='Rahu'&&p.n!='Ketu'?'*':''));
+    if(h==1)items.unshift('La');
+    s+=`<text class="sn" x="${x}" y="${y-12}" text-anchor="middle">${sign}</text>`;
+    for(let k=0;k<items.length;k+=2)
+      s+=`<text class="pl" x="${x}" y="${y+4+(k/2)*14}" text-anchor="middle">${items.slice(k,k+2).join(' ')}</text>`;
+  }
+  return s+'</svg>';
+}
+
+/* ---------- Main ---------- */
+function build(){
+  const dob=$('dob').value,tob=$('tob').value,tz=+$('tz').value;
+  if(!dob||!tob||$('lat').value===''||$('lon').value==='')return alert('Date, time, lat aur lon zaroor bharo');
+  const lat=+$('lat').value,lon=+$('lon').value;
+  const [Y,Mo,Dd]=dob.split('-').map(Number),[h,mi]=tob.split(':').map(Number);
+  const jd=Date.UTC(Y,Mo-1,Dd,h,mi)/864e5+2440587.5-tz/24;
+  const ay=ayan(jd),lag=norm(ascTrop(jd,lat,lon)-ay),ls=Math.floor(lag/30);
+
+  const P=NAMES.map(n=>{
+    const sid=norm(trop(n,jd)-ay);
+    let retro=(n=='Rahu'||n=='Ketu');
+    if(['Mercury','Venus','Mars','Jupiter','Saturn'].includes(n)){
+      let dl=trop(n,jd+0.5)-trop(n,jd-0.5);dl=((dl+540)%360)-180;retro=dl<0;
+    }
+    return{n,sid,sign:Math.floor(sid/30),deg:sid%30,nk:Math.floor(sid/(360/27)),pada:Math.floor((sid%(360/27))/(360/108))+1,retro};
+  });
+  P.forEach(p=>p.house=(p.sign-ls+12)%12+1);
+
+  const moon=P[1],ds=dashas(moon.sid,jd),now=Date.now()/864e5+2440587.5;
+  const cur=ds.find(x=>now>=x.start&&now<x.end)||ds[0];
+  const ad=antar(cur).find(x=>now>=x.start&&now<x.end)||antar(cur)[0];
+
+  const rows=P.map(p=>`<tr><td>${p.n}${p.retro&&p.n!='Rahu'&&p.n!='Ketu'?' (R)':''}</td><td>${RASHI[p.sign]}</td><td>${fd(p.deg)}</td><td>${NAK[p.nk]}-${p.pada}</td><td>${p.house}</td></tr>`).join('');
+  const dRows=ds.map((x,i)=>`<tr><td>${x.lord}</td><td>${jdDate(i==0?jd:x.start)}</td><td>${jdDate(x.end)}</td></tr>`).join('');
+
+  const summary=`Naam: ${$('name').value||'-'}\nJanm: ${dob} ${tob} (UTC${tz>=0?'+':''}${tz}), lat ${lat}, lon ${lon}\nAyanamsa: Lahiri ${ay.toFixed(3)}\nLagna: ${RASHI[ls]} ${fd(lag%30)}\n`
+   +P.map(p=>`${p.n}: ${RASHI[p.sign]} ${fd(p.deg)}, ${NAK[p.nk]} pada ${p.pada}, house ${p.house}${p.retro?' (retro)':''}`).join('\n')
+   +`\nVimshottari: Mahadasha ${cur.lord} (${jdDate(Math.max(cur.start,jd))} se ${jdDate(cur.end)}), Antardasha ${ad.lord} (${jdDate(ad.start)} se ${jdDate(ad.end)})`;
+  CH={summary};
+
+  $('out').innerHTML=`
+  <div class="card"><h3>${esc($('name').value||'Aapki')} Kundli</h3>
+   ${chartSVG(ls,P)}
+   <small>North Indian style, whole-sign houses. La = Lagna, * = vakri. Number = rashi (1=Mesha).</small></div>
+  <div class="card"><h3>Grah sthiti (Nirayana / Lahiri)</h3>
+   <p>Lagna: <b>${RASHI[ls]} ${fd(lag%30)}</b></p>
+   <div style="overflow-x:auto"><table><tr><th>Grah</th><th>Rashi</th><th>Ansh</th><th>Nakshatra-Pada</th><th>Bhav</th></tr>${rows}</table></div></div>
+  <div class="card"><h3>Vimshottari Dasha</h3>
+   <p>Abhi: <b>${cur.lord}</b> mahadasha / <b>${ad.lord}</b> antardasha</p>
+   <table><tr><th>Mahadasha</th><th>Shuru</th><th>Khatam</th></tr>${dRows}</table></div>
+  <div class="card"><h3>Basic reading</h3>
+   <p><b>Lagna (${RASHI[ls]}):</b> ${TRAIT[ls]}.</p>
+   <p><b>Chandra rashi (${RASHI[moon.sign]}), ${NAK[moon.nk]}:</b> ${TRAIT[moon.sign]}.</p>
+   <p><b>Chal rahi ${cur.lord} dasha:</b> ${DTXT[cur.lord]}.</p>
+   <p><b>Antardasha ${ad.lord}:</b> ${DTXT[ad.lord]}.</p>
+   <small>Ye general traits hain, kisi ek vyakti ki pakki bhavishyavani nahi.</small></div>
+  <div class="card"><h3>🤖 AI Jyotish reading</h3>
+   <label>Anthropic API key (sirf aapke browser mein use hogi)</label>
+   <input id="key" type="password" placeholder="sk-ant-...">
+   <button onclick="askAI()">AI se detailed reading lo</button>
+   <div id="ai"></div></div>`;
+}
+
+async function askAI(){
+  const key=$('key').value.trim();if(!key)return alert('API key daalo');
+  $('ai').textContent='AI kundli padh raha hai...';
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+      headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:MODEL,max_tokens:1500,
+        system:'Tum ek anubhavi Vedic jyotishi ho. Sirf diye gaye chart data ke basis par Hinglish mein reading do: personality, career, rishte, health tendencies, aur chal rahi dasha ka asar. Data mein jo nahi hai wo mat banao. Bhasha sahaj rakho, darane wali ya pakki bhavishyavani wali baatein mat karo, aur ant mein 1 line ka reminder do ki ye guidance hai.',
+        messages:[{role:'user',content:CH.summary}]})});
+    const j=await r.json();
+    $('ai').textContent=j.content?j.content.map(c=>c.text||'').join(''):JSON.stringify(j,null,2);
+  }catch(e){$('ai').textContent='Error: '+e.message;}
+}
+</script>
+</body>
+</html>
